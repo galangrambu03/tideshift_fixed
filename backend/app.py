@@ -1,9 +1,12 @@
+import os
+from urllib.parse import quote_plus
+
 from flask import Flask, g, request, jsonify
+from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func, desc
-from backend.firebase_config import *
+from firebase_config import *
 from auth_decorator import firebase_required
-from datetime import date, timedelta
 from models import DailyGoalsLog, db, User, DailyCarbonLog
 from carbon import (
     EMISSION_FACTORS,
@@ -19,8 +22,45 @@ from datetime import date, datetime, timedelta
 import pymysql
 pymysql.install_as_MySQLdb()
 
+
+# ============================
+# KONFIGURASI DATABASE (ISI DI SINI)
+# ============================
+# Untuk debugging di laptop, ubah 4 nilai di bawah ini sesuai MySQL kamu.
+# - XAMPP bawaan: user "root" dan password kosong ("")
+# - Kalau MySQL kamu pakai password, isi di DB_PASSWORD
+DB_USER = "root"
+DB_PASSWORD = ""            # <-- ISI PASSWORD MYSQL KAMU DI SINI (kosong kalau tidak ada)
+DB_HOST = "localhost"
+DB_NAME = "ecomagaradata"   # database ini harus sudah dibuat dulu di MySQL
+
+
+def get_database_uri():
+    """
+    Urutan:
+    1. Kalau ada variabel lingkungan dari Railway (DATABASE_URL / MYSQL_URL), pakai itu.
+    2. Kalau tidak ada (di laptop), pakai nilai DB_USER, DB_PASSWORD, dst di atas.
+    """
+    url = (
+        os.environ.get('DATABASE_URL')
+        or os.environ.get('MYSQL_URL')
+        or os.environ.get('MYSQL_PUBLIC_URL')
+    )
+    if url:
+        if url.startswith('mysql://'):
+            url = url.replace('mysql://', 'mysql+pymysql://', 1)
+        if 'charset=' not in url:
+            url += ('&' if '?' in url else '?') + 'charset=utf8mb4'
+        return url
+
+    # quote_plus supaya password dengan karakter khusus (@, #, /, dll) tetap aman
+    password = quote_plus(DB_PASSWORD)
+    return f"mysql+pymysql://{DB_USER}:{password}@{DB_HOST}/{DB_NAME}?charset=utf8mb4"
+
+
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:@localhost/ecomagaradata?charset=utf8mb4'
+CORS(app)  # wajib supaya app Flutter yang jalan di Chrome bisa memanggil server ini
+app.config['SQLALCHEMY_DATABASE_URI'] = get_database_uri()
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db.init_app(app)
 
@@ -112,7 +152,7 @@ def update_current_island_theme():
     data = request.get_json() or {}
     if 'currentIslandTheme' not in data:
         return jsonify({'message': 'No currentIslandTheme provided'}), 400
-    
+
     new_theme = data['currentIslandTheme']
 
     user = User.query.filter_by(firebase_uid=request.user_uid).first()
@@ -395,7 +435,7 @@ def check_goals_achieved():
 
 
 # ============================
-# ROUTE: Fecth latest goals
+# ROUTE: Fetch latest goals
 # ============================
 @app.route('/latest-goals', methods=['GET'])
 @firebase_required
@@ -482,7 +522,7 @@ def get_latest_goals():
         'goals': combined_goals,
         'logDate': latest_goals.logDate.isoformat()
     }), 200
-    
+
 
 # ============================
 # ROUTE: Check Today's Submission
@@ -563,4 +603,7 @@ def get_all_daily_carbon_logs():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Dipakai saat dijalankan lokal (python app.py).
+    # Di Railway, app dijalankan lewat gunicorn dan bagian ini dilewati.
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=True)
